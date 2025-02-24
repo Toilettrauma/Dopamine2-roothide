@@ -2,6 +2,8 @@
 #include <libjailbreak/util.h>
 #include <libjailbreak/trustcache.h>
 #include <libjailbreak/kcall_arm64.h>
+#include <libjailbreak/signatures.h>
+#include <libjailbreak/basebin_gen.h>
 #include <xpc/xpc.h>
 #include <dlfcn.h>
 #include <sys/mount.h>
@@ -214,6 +216,44 @@ void jbupdate_finalize_stage2(const char *prevVersion, const char *newVersion)
 		// Initialize kcall only after we have the offsets required for it
 		arm64_kcall_init();
 #endif
+	}
+
+	// Update patched dyld
+	int r = basebin_generate(YES);
+	if (r != 0) {
+		char msg[4000];
+		snprintf(msg, 4000, "Dopamine: Updating patched dyld failed with error %d, cannot continue.", r);
+		abort_with_reason(7, 1, msg, 0);
+	}
+
+	// Update dyld trustcache
+	cdhash_t *cdhashes = NULL;
+	uint32_t cdhashesCount = 0;
+	macho_collect_untrusted_cdhashes(JBROOT_PATH("/basebin/.fakelib/dyld"), NULL, NULL, NULL, NULL, 0, &cdhashes, &cdhashesCount);
+
+	if (cdhashesCount > 1) {
+		char msg[4000];
+		snprintf(msg, 4000, "Dopamine: Updating patched dyld failed due to unexpected amount of cdhashes (%d), cannot continue.", cdhashesCount);
+		abort_with_reason(7, 1, msg, 0);
+	}
+	else if (cdhashesCount == 1) {
+		trustcache_file_v1 *dyldTCFile = NULL;
+		r = trustcache_file_build_from_cdhashes(cdhashes, cdhashesCount, &dyldTCFile);
+		free(cdhashes);
+		if (r != 0) {
+			char msg[4000];
+			snprintf(msg, 4000, "Dopamine: Building dyld trustcache failed with error %d, cannot continue.", r);
+			abort_with_reason(7, 1, msg, 0);
+		}
+
+		r = trustcache_file_upload_with_uuid(dyldTCFile, DYLD_TRUSTCACHE_UUID);
+		if (r != 0) {
+			char msg[4000];
+			snprintf(msg, 4000, "Dopamine: Updating dyld trustcache failed with error %d, cannot continue.", r);
+			abort_with_reason(7, 1, msg, 0);
+		}
+
+		free(dyldTCFile);
 	}
 
 	JBFixMobilePermissions();

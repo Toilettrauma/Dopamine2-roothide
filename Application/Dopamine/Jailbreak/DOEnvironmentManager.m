@@ -537,6 +537,23 @@ int reboot3(uint64_t flags, ...);
     }
 }
 
+- (BOOL)isFakelibMounted
+{
+    struct statfs fsb;
+    if (statfs("/usr/lib", &fsb) != 0) return NO;
+    return strcmp(fsb.f_mntonname, "/usr/lib") == 0;
+}
+
+- (int)setFakelibMounted:(BOOL)mounted
+{
+    int r = 0;
+    if (mounted != [self isFakelibMounted]) {
+        const char *arg = mounted ? "mount" : "unmount";
+        r = exec_cmd(JBROOT_PATH("/basebin/jbctl"), "internal", "fakelib", arg, NULL);
+    }
+    return r;
+}
+
 /*
 - (BOOL)isJailbreakHidden
 {

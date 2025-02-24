@@ -1,5 +1,4 @@
 #import "internal.h"
-#import "dyldpatch.h"
 #import "codesign.h"
 #import <libjailbreak/carboncopy.h>
 #import <Foundation/Foundation.h>
@@ -8,7 +7,6 @@
 
 SInt32 CFUserNotificationDisplayAlert(CFTimeInterval timeout, CFOptionFlags flags, CFURLRef iconURL, CFURLRef soundURL, CFURLRef localizationURL, CFStringRef alertHeader, CFStringRef alertMessage, CFStringRef defaultButtonTitle, CFStringRef alternateButtonTitle, CFStringRef otherButtonTitle, CFOptionFlags *responseFlags) API_AVAILABLE(ios(3.0));
 
-/*
 void execute_unsandboxed(void (^block)(void))
 {
 	uint64_t credBackup = 0;
@@ -22,6 +20,15 @@ int mount_unsandboxed(const char *type, const char *dir, int flags, void *data)
 	__block int r = 0;
 	execute_unsandboxed(^{
 		r = mount(type, dir, flags, data);
+	});
+	return r;
+}
+
+int unmount_unsandboxed(const char *dir, int flags)
+{
+	__block int r = 0;
+	execute_unsandboxed(^{
+		r = unmount(dir, flags);
 	});
 	return r;
 }
@@ -42,7 +49,27 @@ void ensureProtectionActive(void)
 	ensureProtected(prebootUUIDPath("/System"));
 	ensureProtected(prebootUUIDPath("/usr"));
 }
-*/
+
+bool fakelib_is_mounted(void)
+{
+	struct statfs fsb;
+    if (statfs("/usr/lib", &fsb) != 0) return NO;
+    return strcmp(fsb.f_mntonname, "/usr/lib") == 0;
+}
+
+int fakelib_set_mounted(bool mounted)
+{
+	int r = 0;
+	if (mounted != fakelib_is_mounted()) {
+		if (mounted) {
+			r = mount_unsandboxed("bindfs", "/usr/lib", MNT_RDONLY, (void *)JBROOT_PATH("/basebin/.fakelib"));
+		}
+		else {
+			r = unmount_unsandboxed("/usr/lib", MNT_FORCE);
+		}
+	}
+	return r;
+}
 
 int jbctl_handle_internal(const char *command, int argc, char* argv[])
 {
@@ -87,43 +114,23 @@ int jbctl_handle_internal(const char *command, int argc, char* argv[])
 		mach_port_deallocate(mach_task_self(), launchdTaskPort);
 		return 0;
 	}
-/*
-	else if (!strcmp(command, "protection_init")) {
-		ensureProtectionActive();
-		return 0;
+	else if (!strcmp(command, "fakelib")) {
+		bool toMount = false;
+		if (argc > 1) {
+			if (!strcmp(argv[1], "mount")) {
+				toMount = true;
+			}
+			else if (!strcmp(argv[1], "unmount")) {
+				toMount = false;
+			}
+			else {
+				return -1;
+			}
+
+			return fakelib_set_mounted(toMount);
+		}
+		return -1;
 	}
-	else if (!strcmp(command, "fakelib_init")) {
-		NSString *basebinPath = JBROOT_PATH(@"/basebin");
-		NSString *fakelibPath = JBROOT_PATH(@"/basebin/.fakelib");
-		printf("Initalizing fakelib...\n");
-
-		// Copy /usr/lib to /var/jb/basebin/.fakelib
-		[[NSFileManager defaultManager] removeItemAtPath:fakelibPath error:nil];
-		[[NSFileManager defaultManager] createDirectoryAtPath:fakelibPath withIntermediateDirectories:YES attributes:nil error:nil];
-		carbonCopy(@"/usr/lib", fakelibPath);
-
-		// Backup and patch dyld
-		NSString *dyldBackupPath = JBROOT_PATH(@"/basebin/.dyld.orig");
-		NSString *dyldPatchPath = JBROOT_PATH(@"/basebin/.dyld.patched");
-		carbonCopy(@"/usr/lib/dyld", dyldBackupPath);
-		carbonCopy(@"/usr/lib/dyld", dyldPatchPath);
-		apply_dyld_patch(dyldPatchPath.fileSystemRepresentation);
-		resign_file(dyldPatchPath, YES);
-
-		// Copy systemhook to fakelib
-		carbonCopy(JBROOT_PATH(@"/basebin/systemhook.dylib"), JBROOT_PATH(@"/basebin/.fakelib/systemhook.dylib"));
-
-		// Replace dyld in fakelib with patched dyld
-		NSString *fakelibDyldPath = [fakelibPath stringByAppendingPathComponent:@"dyld"];
-		[[NSFileManager defaultManager] removeItemAtPath:fakelibDyldPath error:nil];
-		carbonCopy(dyldPatchPath, JBROOT_PATH(@"/basebin/.fakelib/dyld"));
-		return 0;
-	}
-	else if (!strcmp(command, "fakelib_mount")) {
-		printf("Applying mount...\n");
-		return mount_unsandboxed("bindfs", "/usr/lib", MNT_RDONLY, (void *)JBROOT_PATH("/basebin/.fakelib"));
-	}
-*/
 	else if (!strcmp(command, "startup")) {
 //		ensureProtectionActive();
 		char *panicMessage = NULL;
